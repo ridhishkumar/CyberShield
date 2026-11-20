@@ -1,0 +1,7 @@
+/build/
+backend/database/*.db*
+.vs/
+.env
+.env.*
+!.env.example
+
