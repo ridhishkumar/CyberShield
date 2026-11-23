@@ -1,4 +1,5 @@
 #include "integrations.h"
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <curl/curl.h>
@@ -15,7 +16,8 @@ static size_t collect(char *bytes, size_t size, size_t n, void *dest) {
   s.append(bytes, size * n);
   return size * n;
 }
-static S fetch(const S &url, const Args &headers = {}, const S &body = "") {
+static S fetch(const S &url, const Args &headers = {}, const S &body = "",
+               long *httpStatus = nullptr, CURLcode *curlStatus = nullptr) {
   static const auto init = curl_global_init(CURL_GLOBAL_DEFAULT);
   if (init != CURLE_OK)
     throw std::runtime_error("Network unavailable");
@@ -46,7 +48,12 @@ static S fetch(const S &url, const Args &headers = {}, const S &body = "") {
   curl_easy_setopt(h.get(), CURLOPT_WRITEDATA, &result);
   if (!body.empty())
     curl_easy_setopt(h.get(), CURLOPT_POSTFIELDS, body.c_str());
-  if (curl_easy_perform(h.get()) != CURLE_OK)
+  const auto status = curl_easy_perform(h.get());
+  if (httpStatus)
+    curl_easy_getinfo(h.get(), CURLINFO_RESPONSE_CODE, httpStatus);
+  if (curlStatus)
+    *curlStatus = status;
+  if (status != CURLE_OK)
     throw std::runtime_error("Provider unavailable");
   return result;
 }

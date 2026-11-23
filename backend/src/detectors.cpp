@@ -1,5 +1,6 @@
 #include "download_sources.h"
 #include "dsa.h"
+#include "website_inspector.h"
 #include <asio/ip/address.hpp>
 #include <regex>
 #include <sstream>
@@ -56,6 +57,56 @@ static S wordsOnly(const S &s) {
   while (!out.empty() && out.back() == ' ')
     out.pop_back();
   return out;
+}
+static S productNameKey(const S &name) {
+  S value = lower(name);
+  static const std::regex plusPlus(R"(\+\+)");
+  static const std::regex extension(R"(\.(exe|msi|dmg|appimage)$)");
+  static const std::regex architecture(
+      R"(\s*\((x64|x86|arm64|64[- ]bit|32[- ]bit)\)$)");
+  static const std::regex qualifier(
+      R"(\s+(x64|x86|arm64|64[- ]bit|32[- ]bit|installer|setup|download|for windows|for macos|for linux)$)");
+  static const std::regex version(R"(\s+v?[0-9]+(\.[0-9]+){0,3}$)");
+  value = std::regex_replace(value, plusPlus, " plus plus");
+  value = std::regex_replace(value, extension, "");
+  value = std::regex_replace(value, architecture, "");
+  std::smatch suffix;
+  while (true) {
+    if (std::regex_search(value, suffix, qualifier))
+      value.erase(static_cast<size_t>(suffix.position()));
+    else if (std::regex_search(value, suffix, version))
+      value.erase(static_cast<size_t>(suffix.position()));
+    else
+      break;
+  }
+  return wordsOnly(value);
+}
+static bool matchesProductName(const Product &product, const S &name) {
+  for (const auto &alias : product.names)
+    if (productNameKey(alias) == name)
+      return true;
+  return false;
+}
+static S publisherKey(const S &publisher) {
+  S value = wordsOnly(publisher);
+  static const Args legalSuffixes = {
+      "incorporated", "inc", "corporation", "corp", "limited", "ltd",
+      "llc", "plc"};
+  bool removed = true;
+  while (removed) {
+    removed = false;
+    for (const auto &suffix : legalSuffixes) {
+      const S ending = " " + suffix;
+      if (value.size() >= ending.size() &&
+          value.compare(value.size() - ending.size(), ending.size(), ending) ==
+              0) {
+        value.erase(value.size() - ending.size());
+        removed = true;
+        break;
+      }
+    }
+  }
+  return value;
 }
 static bool hasPhrase(const S &normalized, const S &phrase) {
   return (" " + normalized + " ").find(" " + phrase + " ") != S::npos;
@@ -262,6 +313,8 @@ J softwareSources() {
   return entries;
 }
 J analyze(const S &type, const J &j) {
+  if (type == "Website")
+    return website_inspector::inspectWebsite(j);
   Findings f;
   S target, source = "Local, transparent rules",
             advice = "Verify the destination through an independently obtained "
@@ -271,6 +324,7 @@ J analyze(const S &type, const J &j) {
   bool knownSource = false;
   int confidencePenalty = 0;
   S path, basis;
+  Findings validationFindings;
   if (type == "Website" || type == "Software") {
     const bool software = type == "Software";
     S submitted = field(j, "url", 2048, !software);
@@ -282,7 +336,8 @@ J analyze(const S &type, const J &j) {
         throw Problem(400, "Enter the software name or its download address.");
     }
     if (!submitted.empty()) {
-      hostname = website(submitted, f, &path);
+      Findings &urlFindings = software ? f : validationFindings;
+      hostname = website(submitted, urlFindings, &path);
       target = hostname;
       const S address = lower(submitted);
       const bool http =
@@ -298,20 +353,31 @@ J analyze(const S &type, const J &j) {
         notes.push_back("The context mentions a different host. Confirm the "
                         "intended service.");
     }
-    S productName = wordsOnly(
-        std::regex_replace(lower(app), std::regex("[.](exe|msi|dmg)$"), ""));
+    const S productName = productNameKey(app);
     const Product *match = nullptr;
-    for (const auto &product : downloadCatalogue()) {
-      if (software && !linearSearch(product.names, productName))
-        continue;
-      if (software)
+    if (software)
+      for (const auto &product : downloadCatalogue()) {
+        if (!matchesProductName(product, productName))
+          continue;
         match = &product;
-      for (const auto &ref : product.sources) {
-        if (!path.empty() && hostname == ref.host &&
-            pathMatch(path, ref.path) &&
-            (hostname != "github.com" || path == ref.path ||
-             path == ref.path + "/" || pathMatch(path, ref.path + "/releases")))
-          knownSource = true;
+        for (const auto &ref : product.sources) {
+          if (!path.empty() && hostname == ref.host &&
+              pathMatch(path, ref.path) &&
+              (hostname != "github.com" || path == ref.path ||
+               path == ref.path + "/" ||
+               pathMatch(path, ref.path + "/releases")))
+            knownSource = true;
+        }
+      }
+    bool productBrandedHost = false;
+    if (match && !hostname.empty()) {
+      const S hostTerms = wordsOnly(hostname);
+      for (const auto &alias : match->names) {
+        const S aliasKey = productNameKey(alias);
+        if (aliasKey.size() >= 4 && hasPhrase(hostTerms, aliasKey)) {
+          productBrandedHost = true;
+          break;
+        }
       }
     }
     if (software) {
@@ -327,11 +393,19 @@ J analyze(const S &type, const J &j) {
         const auto &ref = match->sources.front();
         notes.push_back("Official reference: https://" + ref.host + ref.path);
         if (!hostname.empty() && !knownSource)
-          f.push_back({"The download location differs from the listed sources "
-                       "for this product.",
-                       20});
+          f.push_back(
+              {productBrandedHost
+                   ? "The hostname uses this product's name but is not a "
+                     "listed publisher source."
+                   : "The download location differs from the listed sources "
+                     "for this product.",
+               productBrandedHost ? 35 : 20});
         if (!publisher.empty() &&
-            !linearSearch(match->publishers, wordsOnly(publisher))) {
+            std::none_of(match->publishers.begin(), match->publishers.end(),
+                         [&](const S &knownPublisher) {
+                           return publisherKey(knownPublisher) ==
+                                  publisherKey(publisher);
+                         })) {
           f.push_back({"The declared publisher differs from the publisher "
                        "listed for this product.",
                        25});
@@ -358,27 +432,30 @@ J analyze(const S &type, const J &j) {
                         "specific publisher and listing.");
       advice = "Use a publisher download page and check the installer's "
                "digital signature before opening it.";
-    } else {
-      basis = knownSource
-                  ? "The address matches a location in the publisher reference "
-                    "catalogue. The page contents have not been inspected."
-                  : "CyberShield has no verified trust evidence for this "
-                    "address. A well-formed hostname and HTTPS alone do not "
-                    "establish safety.";
     }
-    // A missing publisher match is an evidence gap, not proof of a scam.
-    confidencePenalty += knownSource ? 15 : 30;
-    if (!knownSource) {
-      f.push_back({software ? "Source verification allowance: the product and "
-                              "source could not be confirmed together."
-                            : "Source verification allowance: the address has "
-                              "no match in the local publisher directory.",
-                   10});
+    if (software) {
+      // A missing publisher match is an evidence gap, not proof of a scam.
+      confidencePenalty += knownSource ? 15 : 30;
+      if (!knownSource)
+        f.push_back(
+            {"Source verification allowance: the product and source could "
+             "not be confirmed together.",
+             10});
     }
+    if (type == "Software")
+      notes.push_back(
+          "The report shows a risk score, not a trust score. It uses URL "
+          "structure and bundled publisher references; it does not inspect the "
+          "installer or guarantee safety.");
+    else
+      notes.push_back(
+          "Risk points are the sum of detected indicators (capped at 100). "
+          "The trust score starts at 100, subtracts risk points and an "
+          "evidence-gap penalty. It is a screening estimate, not a "
+          "probability or guarantee.");
     notes.push_back(
-        "Risk points are the sum of detected indicators (capped at 100). The trust score starts at 100, subtracts risk points and an evidence-gap penalty. It is a screening estimate, not a probability or guarantee.");
-    notes.push_back(
-        "Assessment uses URL structure and bundled publisher references. The checker does not open or execute the website, inspect its live page, or establish domain age or ownership.");
+        "Assessment uses URL structure and bundled publisher references. "
+        "The checker does not open or execute the website.");
   } else {
     const bool sms = type == "SMS";
     S body = field(j, "content", sms ? 5000 : 20000);
@@ -583,13 +660,25 @@ J analyze(const S &type, const J &j) {
   }
   score = std::min(score, 100);
   const int trustScore = std::max(0, std::min(100, 100 - score - confidencePenalty));
-  S category = score >= 60   ? "High risk"
-               : score >= 25 ? "Suspicious"
-                             : "Lower risk";
-  J report = {{"type", type},         {"target", target},     {"score", score},
-              {"trust_score", trustScore}, {"confidence_penalty", confidencePenalty},
-              {"category", category}, {"findings", findings}, {"notes", notes},
-              {"advice", advice},     {"source", source}};
+  S category;
+  if (score >= 60)
+    category = "High risk";
+  else if (score >= 25)
+    category = "Suspicious";
+  else if (type == "Software")
+    category = knownSource ? "Listed source" : "Insufficient information";
+  else
+    category = "Lower risk";
+  J report = {{"type", type},
+              {"target", target},
+              {"category", category},
+              {"findings", findings},
+              {"notes", notes},
+              {"advice", advice},
+              {"source", source}};
+  report["score"] = score;
+  report["trust_score"] = type == "Software" ? J(nullptr) : J(trustScore);
+  report["confidence_penalty"] = confidencePenalty;
   if (!basis.empty())
     report["basis"] = basis;
   if (!hostname.empty())

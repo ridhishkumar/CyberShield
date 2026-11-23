@@ -29,10 +29,16 @@ void record(DB &db, const S &uid, J &report) {
     return;
   if (db.query("SELECT history FROM settings WHERE uid=?", {uid})
           .at(0)["history"] == 1) {
+    J score = report["score"];
+    if (report.value("type", S()) == "Website" &&
+        report.contains("confidence") && report["confidence"].is_object() &&
+        report["confidence"].value("completed", 0) <
+            report["confidence"].value("applicable", 0))
+      score = nullptr;
     db.query("INSERT INTO scans(uid,type,target,category,score,detail) "
              "VALUES(?,?,?,?,NULLIF(?,'null'),?)",
              {uid, report["type"], report["target"], report["category"],
-              report["score"].dump(), report.dump()});
+              score.dump(), report.dump()});
   }
   notify(db, uid, "scans", report["type"].get<S>() + " check completed.");
   if (report["category"] == "High risk")

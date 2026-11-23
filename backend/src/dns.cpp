@@ -12,6 +12,7 @@ void checkDns(J &report) {
   asio::error_code ec;
   asio::ip::make_address(host, ec);
   if (!ec || host.find('.') == S::npos) {
+    report["dns_status"] = "skipped";
     report["dns"] =
         "DNS lookup skipped for this local name or numeric address.";
     return;
@@ -20,6 +21,7 @@ void checkDns(J &report) {
   static std::atomic<unsigned> pending{0};
   if (pending.fetch_add(1) >= 2) {
     --pending;
+    report["dns_status"] = "busy";
     report["dns"] =
         "DNS lookup busy. Try again to check hostname availability.";
     return;
@@ -51,6 +53,7 @@ void checkDns(J &report) {
   const S state = result.wait_for(1500ms) == std::future_status::ready
                       ? result.get()
                       : "unavailable";
+  report["dns_status"] = state;
   if (state == "resolved")
     report["dns"] = "Your DNS resolver found an address for this hostname. "
                     "Site ownership and page availability are unverified.";

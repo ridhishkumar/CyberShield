@@ -1,24 +1,38 @@
 import { $, api, card, esc, date, options, icon } from "./common.js";
-import { display } from "./reports.js";
+import { display, displayedCategory } from "./reports.js";
 function rows(items) {
   return items.length
     ? items
         .map(
-          (r) =>
-            '<div class="listitem reportrow"><span class="tag" data-risk="' +
-            esc(r.category) +
-            '">' +
-            esc(r.category) +
-            "</span><h3>" +
-            esc(r.type === "Email" ? "Email analysis" : r.target) +
-            "</h3><p>" +
-            esc(r.type) +
-            " · " +
-            esc(date(r.date)) +
-            (typeof r.score === "number" ? " · " + r.score + "/100" : "") +
-            '</p><button data-report="' +
-            Number(r.id) +
-            '">View report</button></div>',
+          (r) => {
+            const category = displayedCategory(r);
+            const score =
+              typeof r.score === "number"
+                ? r.score
+                : r.type === "Website" && Number.isInteger(r.observed_score)
+                  ? r.observed_score
+                  : null;
+            return (
+              '<div class="listitem reportrow">' +
+              (category
+                ? '<span class="tag" data-risk="' +
+                  esc(r.category) +
+                  '">' +
+                  esc(category) +
+                  "</span>"
+                : "") +
+              "<h3>" +
+                esc(r.type === "Email" ? "Email analysis" : r.target) +
+                "</h3><p>" +
+                esc(r.type) +
+                " · " +
+                esc(date(r.date)) +
+                (score !== null ? " · " + score + "/100" : "") +
+                '</p><button data-report="' +
+                Number(r.id) +
+                '">View report</button></div>'
+            );
+          },
         )
         .join("")
     : "<p>No scans to display.</p>";
@@ -230,9 +244,17 @@ export async function history() {
         '</select></label><label>Risk<select id="risk">' +
         options([
           "All risks",
-          "Lower risk",
-          "Suspicious",
           "High risk",
+          "Moderate Risk",
+          "Suspicious",
+          "Low Risk",
+          "No Known Issues Detected",
+          "Unable to Verify",
+          "Dangerous",
+          "No known threats detected",
+          "Unable to verify",
+          "Lower risk",
+          "Unverified",
           "Insufficient information",
         ]) +
         '</select></label><label>Date (local)<input id="day" type="date"></label></div><div id="items"></div><button id="clear">Clear history</button>',

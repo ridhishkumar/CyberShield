@@ -1,11 +1,11 @@
 import { $, api, submit, input, area, card, esc, icon } from "./common.js";
-import { display } from "./reports.js";
-const addressField = (label, required) =>
+import { display, displayedCategory } from "./reports.js";
+const addressField = (label, required, max = 2048) =>
   input(
     "url",
     label,
     "text",
-    2048,
+    max,
     (required ? "required " : "") +
       'inputmode="url" autocapitalize="none" spellcheck="false" placeholder="example.in or https://example.org/path"',
   );
@@ -17,11 +17,10 @@ const checks = {
     title: "Website address",
     action: "Check website",
     endpoint: "check-url",
-    hint: "Enter a domain or full web address. CyberShield checks for deceptive wording and compares the address with known publisher locations.",
+    hint: "Enter a domain or full web address. CyberShield performs a bounded local DNS, TLS, HTTP, redirect, and inert HTML inspection. Local/private destinations and unsafe redirects are blocked. Do not submit a URL containing private tokens. No detected indicators do not guarantee safety.",
     fields: () =>
-      addressField("Website URL", true) +
-      area("description", "Expected site or context (optional)", 1500) +
-      dnsField,
+      addressField("Website URL", true, 8192) +
+      area("description", "Expected site or context (optional)", 1500),
   },
   "software-detector": {
     title: "Software and source",
@@ -107,6 +106,7 @@ function inspectUrl(raw) {
   return findings;
 }
 function applyWebOrEmailTrust(report, id, data) {
+  if (id === "software-detector") return;
   if (typeof report.trust_score === "number") return;
   let extraRisk = 0;
   const urls = [];
@@ -129,27 +129,19 @@ function applyWebOrEmailTrust(report, id, data) {
     ? report.score
     : report.findings.reduce((sum, item) => sum + Number(item.points || 0), 0);
   let evidencePenalty = 0;
-  if (id === "website-detector" || id === "software-detector") {
-    evidencePenalty = report.basis && /matches a location in the publisher reference|match a publisher reference/i.test(report.basis) ? 15 : 30;
-    if (!data.url) evidencePenalty = 35;
-  } else {
-    evidencePenalty = (data.sender ? 12 : 20) + (data.headers ? 0 : 18);
-    if (data.headers) {
-      const allPass = ["spf", "dkim", "dmarc"].every((key) =>
-        new RegExp("\\b" + key + "\\s*=\\s*pass\\b", "i").test(data.headers),
-      );
-      if (!allPass) evidencePenalty += 8;
-    }
+  evidencePenalty = (data.sender ? 12 : 20) + (data.headers ? 0 : 18);
+  if (data.headers) {
+    const allPass = ["spf", "dkim", "dmarc"].every((key) =>
+      new RegExp("\\b" + key + "\\s*=\\s*pass\\b", "i").test(data.headers),
+    );
+    if (!allPass) evidencePenalty += 8;
   }
   const risk = Math.min(100, baseRisk + extraRisk);
   report.score = risk;
   report.trust_score = Math.max(0, 100 - risk - evidencePenalty);
   report.confidence_penalty = evidencePenalty;
   report.notes.push("Trust score = 100 minus detected risk indicators and an evidence-coverage penalty. It is a screening estimate, not a probability or guarantee.");
-  if (id === "website-detector" || id === "software-detector")
-    report.notes.push("The browser-side checks inspect the submitted URL structure only. They do not visit the site or verify its live content, domain ownership or age.");
-  else
-    report.notes.push("Email sender identity and supplied authentication headers are not independently authenticated by this local analysis.");
+  report.notes.push("Email sender identity and supplied authentication headers are not independently authenticated by this local analysis.");
 }
 async function applyFileTrust(report, file) {
   if (typeof report.trust_score === "number") return;
@@ -235,6 +227,136 @@ function normalizeAddress(value) {
   }
   return url;
 }
+function validWebsiteReport(report) {
+  const categories = new Set([
+    "High risk",
+    "Moderate Risk",
+    "Low Risk",
+    "Suspicious",
+    "No Known Issues Detected",
+    "Unable to Verify",
+  ]);
+  const statuses = new Set([
+    "complete",
+    "partial",
+    "unavailable",
+    "blocked",
+    "not_applicable",
+  ]);
+  const validTldPolicy =
+    !report ||
+    !report.tld_policy ||
+    (report.tld_policy &&
+      ["approved", "unapproved", "not_applicable"].includes(
+        report.tld_policy.status,
+      ) &&
+      typeof report.tld_policy.tld === "string" &&
+      typeof report.tld_policy.explanation === "string" &&
+      Number.isInteger(report.tld_policy.risk_points) &&
+      report.tld_policy.risk_points >= 0 &&
+      report.tld_policy.risk_points <= 100 &&
+      (report.tld_policy.status !== "approved" ||
+        report.tld_policy.risk_points === 0) &&
+      (report.tld_policy.status !== "unapproved" ||
+        report.tld_policy.risk_points >= 51) &&
+      (report.tld_policy.status !== "not_applicable" ||
+        report.tld_policy.risk_points === 0));
+  return (
+    report &&
+    report.type === "Website" &&
+    categories.has(report.category) &&
+    (report.category === "Unable to Verify"
+      ? report.score === null
+      : Number.isInteger(report.score) &&
+        report.score >= 0 &&
+        report.score <= 100) &&
+    Number.isInteger(report.observed_score) &&
+    report.observed_score >= 0 &&
+    report.observed_score <= 100 &&
+    Array.isArray(report.findings) &&
+    report.findings.every(
+      (finding) =>
+        finding &&
+        typeof finding.id === "string" &&
+        typeof finding.category === "string" &&
+        typeof finding.family === "string" &&
+        typeof finding.severity === "string" &&
+        typeof finding.text === "string" &&
+        typeof finding.evidence === "string" &&
+        Number.isInteger(finding.points) &&
+        finding.points >= 0 &&
+        finding.points <= 100 &&
+        Number.isInteger(finding.reliability) &&
+        finding.reliability >= 0 &&
+        finding.reliability <= 100,
+    ) &&
+    Array.isArray(report.checks) &&
+    report.checks.length === 6 &&
+    report.checks.every(
+      (check) =>
+        check &&
+        typeof check.name === "string" &&
+        statuses.has(check.status) &&
+        typeof check.summary === "string" &&
+        Array.isArray(check.evidence) &&
+        check.evidence.every((item) => typeof item === "string"),
+    ) &&
+    report.confidence &&
+    Number.isInteger(report.confidence.completed) &&
+    Number.isInteger(report.confidence.applicable) &&
+    Number.isInteger(report.confidence.planned) &&
+    Number.isInteger(report.confidence.percentage) &&
+    report.confidence.completed >= 0 &&
+    report.confidence.completed <= report.confidence.applicable &&
+    report.confidence.applicable <= report.confidence.planned &&
+    report.confidence.planned === 6 &&
+    report.confidence.percentage >= 0 &&
+    report.confidence.percentage <= 100 &&
+    report.confidence.percentage ===
+      (report.confidence.applicable
+        ? Math.round(
+            (100 * report.confidence.completed) /
+              report.confidence.applicable,
+          )
+        : 0) &&
+    report.scoring &&
+    validTldPolicy &&
+    report.scoring.total === report.score &&
+    report.scoring.observed_total === report.observed_score &&
+    ["complete_inspection", "incomplete_inspection"].includes(
+      report.scoring.observed_scope,
+    ) &&
+    Number.isInteger(report.scoring.category_subtotal) &&
+    report.scoring.category_subtotal >= 0 &&
+    report.scoring.category_subtotal <= 200 &&
+    Number.isInteger(report.scoring.corroboration_bonus) &&
+    report.scoring.corroboration_bonus >= 0 &&
+    report.scoring.corroboration_bonus <= 12 &&
+    Number.isInteger(report.scoring.independent_categories) &&
+    report.scoring.independent_categories >= 0 &&
+    report.scoring.category_points &&
+    typeof report.scoring.category_points === "object" &&
+    !Array.isArray(report.scoring.category_points) &&
+    Object.values(report.scoring.category_points).every(
+      (points) => Number.isInteger(points) && points >= 0 && points <= 100,
+    ) &&
+    Array.isArray(report.indicator_coverage) &&
+    report.indicator_coverage.length > 0 &&
+    report.indicator_coverage.every(
+      (item) =>
+        item &&
+        typeof item.letter === "string" &&
+        typeof item.category === "string" &&
+        ["checked", "partial", "not_checked", "not_used"].includes(
+          item.status,
+        ) &&
+        typeof item.details === "string",
+    ) &&
+    Array.isArray(report.notes) &&
+    typeof report.advice === "string" &&
+    typeof report.source === "string"
+  );
+}
 export function checker(id) {
   const check = checks[id];
   $("#content").innerHTML =
@@ -282,6 +404,14 @@ export function checker(id) {
     result.replaceChildren();
     form.querySelector("output").textContent = "";
   };
+  if (id === "website-detector")
+    form.addEventListener("input", () => {
+      if (!form.querySelector("button.primary").disabled) return;
+      generation++;
+      result.replaceChildren();
+      form.querySelector("output").textContent =
+        "Inputs changed; the pending scan result will be discarded.";
+    });
   submit(form, async (data) => {
     const current = ++generation;
     result.replaceChildren();
@@ -294,14 +424,42 @@ export function checker(id) {
       if (!data.name && !data.url)
         throw Error("Enter a software name or a download URL.");
     }
-    const report = await api(check.endpoint, "POST", data);
-    if (current !== generation) return;
-    if (id === "website-detector" || id === "software-detector" || id === "email-detector")
+    if (id === "website-detector")
+      form.querySelector("output").textContent =
+        "Inspecting the submitted URL with CyberShield's local engine…";
+    let report;
+    try {
+      report = await api(check.endpoint, "POST", data);
+    } catch (error) {
+      if (id === "website-detector")
+        throw Error("Unable to verify this URL. " + error.message);
+      throw error;
+    }
+    if (current !== generation)
+      return id === "website-detector"
+        ? "Inputs changed during the scan; its result was discarded."
+        : "";
+    if (id === "website-detector" && !validWebsiteReport(report))
+      throw Error(
+        "The running server returned an incompatible Website report. Close old CyberShield server windows, start the updated copy, and try again.",
+      );
+    if (id === "software-detector" || id === "email-detector")
       applyWebOrEmailTrust(report, id, data);
     display(result, report);
     result.focus({ preventScroll: true });
     if (matchMedia("(max-width: 800px)").matches)
       result.scrollIntoView({ block: "start" });
+    if (id === "website-detector") {
+      if (report.category === "Unable to Verify") {
+        const category = displayedCategory(report);
+        return (
+          (category ? category + " — " : "") +
+          report.observed_score +
+          "/100"
+        );
+      }
+      return displayedCategory(report) + ".";
+    }
     return "Analysis complete.";
   });
 }

@@ -22,7 +22,9 @@ export async function api(path, method = "GET", data) {
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(data);
   }
-  init.signal = AbortSignal.timeout(data instanceof File ? 45000 : 20000);
+  init.signal = AbortSignal.timeout(
+    data instanceof File ? 45000 : path === "check-url" ? 30000 : 20000,
+  );
   let response;
   try {
     response = await fetch("/api/" + path, init);

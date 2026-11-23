@@ -1101,6 +1101,9 @@ button[aria-busy="true"] {
 .risk-low {
   --signal: var(--safe);
 }
+.risk-unknown {
+  --signal: var(--warn);
+}
 .resulthead {
   display: flex;
   align-items: center;
@@ -1199,6 +1202,10 @@ button[aria-busy="true"] {
   color: var(--risk);
 }
 .tag[data-risk="Suspicious"] {
+  background: var(--in);
+  color: var(--warn);
+}
+.tag[data-risk="Unverified"] {
   background: var(--in);
   color: var(--warn);
 }

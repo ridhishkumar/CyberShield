@@ -3,6 +3,7 @@
 #include "app.h"
 #include "crow.h"
 #include "integrations.h"
+#include "website_inspector.h"
 #include <ctime>
 #include <fstream>
 #include <map>
@@ -88,15 +89,18 @@ static crow::response api(const crow::request &req, S path) {
         method == "POST" && (path == "check-url" || path == "check-email" ||
                              path == "check-software" || path == "check-sms");
     if (detector) {
-      result = analyze(path == "check-url"     ? "Website"
-                       : path == "check-email" ? "Email"
-                       : path == "check-sms"   ? "SMS"
-                                               : "Software",
-                       data);
-      if (result.contains("hostname")) {
-        if (data.value("dnsLookup", false))
-          checkDns(result);
-        reputation(result);
+      if (path == "check-url") {
+        result = website_inspector::inspectWebsite(data);
+      } else {
+        result = analyze(path == "check-email" ? "Email"
+                         : path == "check-sms" ? "SMS"
+                                                : "Software",
+                         data);
+        if (result.contains("hostname")) {
+          if (data.value("dnsLookup", false))
+            checkDns(result);
+          reputation(result);
+        }
       }
     }
     if (file && method == "POST") {
