@@ -384,7 +384,7 @@ output:empty {
   display: none;
 }
 .top {
-  height: 68px;
+  height: 84px;
   position: fixed;
   inset: 0 0 auto;
   z-index: 5;
@@ -415,7 +415,7 @@ output:empty {
 }
 .side {
   position: fixed;
-  top: 68px;
+  top: 84px;
   bottom: 0;
   left: 0;
   width: 226px;
@@ -444,7 +444,7 @@ output:empty {
   text-decoration: none;
 }
 .workspace {
-  margin: 68px auto 0;
+  margin: 84px auto 0;
   padding: 45px max(5vw, 24px);
   max-width: 1450px;
   animation: appear 0.25s ease;
@@ -669,22 +669,139 @@ output:empty {
   position: fixed;
   bottom: 78px;
   left: 18px;
-  width: min(350px, calc(100vw - 36px));
+  width: min(410px, calc(100vw - 36px));
+  height: min(560px, calc(var(--chat-vh, 100dvh) - 104px));
+  min-height: min(260px, calc(var(--chat-vh, 100dvh) - 104px));
   z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background:
+    radial-gradient(ellipse at top left, #c8b7ff12, transparent 56%),
+    var(--panel);
+}
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-header strong {
+  flex: 1;
+  color: var(--heading);
+}
+.chat-header button {
+  min-width: 38px;
+}
+#chatmode {
+  color: var(--muted);
 }
 .chatlog {
-  max-height: 220px;
+  flex: 1;
+  min-height: 0;
   overflow: auto;
-  margin: 14px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0;
+  padding: 4px 2px;
 }
-.chatlog p {
-  padding: 9px;
+.chat-message {
+  display: grid;
+  gap: 3px;
+  width: fit-content;
+  max-width: 92%;
+}
+.chat-message.user {
+  align-self: flex-end;
+  justify-items: end;
+}
+.chat-message.assistant {
+  align-self: flex-start;
+}
+.chat-message-label {
+  padding-inline: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.chat-bubble {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
   background: var(--in);
-  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.chat-message.user .chat-bubble {
+  border-color: #c8b7ff66;
+  background: var(--blue);
+}
+.chat-bubble p {
+  margin: 0;
+}
+.chat-bubble p + p,
+.chat-bubble p + ul,
+.chat-bubble p + ol,
+.chat-bubble ul + p,
+.chat-bubble ol + p {
+  margin-top: 9px;
+}
+.chat-bubble ul,
+.chat-bubble ol {
+  margin: 7px 0 0;
+  padding-left: 20px;
+}
+.chat-bubble li + li {
+  margin-top: 4px;
+}
+.chat-status {
+  margin: 0;
+  color: var(--muted);
+  font-style: italic;
+}
+.chat-consent {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
 }
 .chat form {
-  display: flex;
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 7px;
+}
+.chat form > label {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 13px;
+}
+.chat textarea {
+  min-height: 48px;
+  max-height: 120px;
+  resize: vertical;
+}
+.chat-send {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
+  min-height: 44px;
+  color: #171322;
+  background: var(--act);
+  border-color: var(--cyan);
+}
+.chat-send:hover {
+  background: var(--cyan);
+}
+.chat-send .icon {
+  width: 17px;
+  height: 17px;
+}
+.chat form output {
+  grid-column: 1 / -1;
+  color: var(--risk);
+}
+.chat-retry {
+  display: block;
+  margin-top: 8px;
 }
 .mobiletoggle {
   display: none !important;
@@ -813,14 +930,25 @@ output:empty {
     scroll-behavior: auto !important;
   }
 }
-.brand img.wordmark,
-.top .brand img.wordmark {
-  width: auto;
-  max-width: 145px;
-  height: 45px;
-  margin-right: 0;
-  object-fit: contain;
-  border-radius: 5px;
+.brand .wordmark-crop {
+  --logo-size: 72px;
+  position: relative;
+  display: block;
+  width: calc(var(--logo-size) * 2.77);
+  height: var(--logo-size);
+  flex: none;
+  overflow: hidden;
+}
+.brand img.wordmark {
+  position: absolute;
+  left: calc(var(--logo-size) * -0.2734);
+  top: calc(var(--logo-size) * -0.4549);
+  width: calc(var(--logo-size) * 3.281);
+  max-width: none;
+  height: calc(var(--logo-size) * 2.188);
+  margin: 0;
+  object-fit: fill;
+  border-radius: 0;
 }
 :root {
   --safe: #83e3b4;
@@ -1127,11 +1255,124 @@ button[aria-busy="true"] {
   color: var(--signal);
   letter-spacing: -0.055em;
 }
+.score-caption {
+  color: var(--signal);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.score-explanation {
+  display: block;
+  margin: -8px 0 16px;
+  opacity: 0.78;
+}
 .result .meter {
   margin: 8px 0 20px;
 }
 .result .meter span {
   background: var(--signal);
+}
+.email-summary,
+.email-assessment,
+.email-confidence,
+.email-links,
+.email-positive {
+  margin: 18px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--in);
+}
+.email-limitations {
+  margin: 18px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--in);
+}
+.email-summary h3,
+.email-assessment h3,
+.email-links h3,
+.email-positive h3,
+.email-limitations h3 {
+  margin: 0 0 10px;
+}
+.email-summary p,
+.email-confidence p {
+  margin: 0;
+}
+.email-score-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.email-score-item {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.email-score-item > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.email-score-item strong {
+  font-size: 0.9rem;
+}
+.email-score-item b {
+  white-space: nowrap;
+  color: var(--cyan);
+}
+.email-score-item small,
+.email-confidence small {
+  color: var(--muted);
+}
+.email-score-track {
+  height: 6px;
+  margin: 8px 0 5px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--line);
+}
+.email-score-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--cyan);
+}
+.email-confidence {
+  border-color: var(--cyan);
+}
+.email-confidence strong {
+  color: var(--cyan);
+}
+.email-confidence ul,
+.email-links ul,
+.email-positive ul,
+.email-limitations ul {
+  margin: 9px 0 0;
+  padding-left: 20px;
+}
+.email-confidence li,
+.email-links li,
+.email-positive li,
+.email-limitations li {
+  margin: 6px 0;
+}
+.email-links code {
+  display: block;
+  margin: 5px 0;
+  color: var(--muted);
+  font: 0.82rem/1.45 ui-monospace, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+.email-links li > small,
+.email-positive li > small {
+  display: block;
+  color: var(--muted);
 }
 .evidence {
   padding: 0;
@@ -1147,6 +1388,27 @@ button[aria-busy="true"] {
 .evidence strong {
   color: var(--signal);
   min-width: 32px;
+}
+.evidence .email-signal {
+  align-items: flex-start;
+}
+.evidence .email-signal > strong {
+  flex: 0 0 190px;
+  min-width: 0;
+}
+.signal-severity {
+  display: inline-block;
+  margin: 3px 0;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+.evidence-status {
+  color: var(--muted);
 }
 .recommend {
   padding: 15px 18px;
@@ -1227,11 +1489,17 @@ button[aria-busy="true"] {
     overflow: hidden;
   }
   .signed .workspace {
-    height: calc(100dvh - 143px);
+    height: calc(100dvh - 147px);
     overflow-y: auto;
-    margin-top: 68px;
+    margin-top: 72px;
     padding: 22px 16px 32px;
     scroll-padding-bottom: 22px;
+  }
+  .top {
+    height: 72px;
+  }
+  .side {
+    top: 72px;
   }
   .signed:after {
     content: "";
@@ -1252,8 +1520,13 @@ button[aria-busy="true"] {
     bottom: 12px;
   }
   .chat {
+    left: 12px;
     right: 12px;
-    bottom: 77px;
+    bottom: calc(var(--chat-vv-bottom, 0px) + 10px + env(safe-area-inset-bottom));
+    width: auto;
+    height: min(620px, calc(var(--chat-vh, 100dvh) - 20px));
+    max-height: none;
+    min-height: min(220px, calc(var(--chat-vh, 100dvh) - 20px));
   }
   .dash-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1410,8 +1683,8 @@ button[aria-busy="true"] {
   .top .account-nav {
     gap: 2px;
   }
-  .top .brand img.wordmark {
-    max-width: clamp(75px, 24vw, 130px);
+  .brand .wordmark-crop {
+    --logo-size: 56px;
   }
   .metric span {
     display: flex;
@@ -1428,6 +1701,29 @@ button[aria-busy="true"] {
 }
 #result:empty {
   display: none;
+}
+
+@media (max-width: 640px) {
+  .email-score-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .evidence .email-signal {
+    display: block;
+  }
+  .evidence .email-signal > strong {
+    display: block;
+    margin-bottom: 5px;
+  }
+  .email-summary,
+  .email-assessment,
+  .email-confidence,
+  .email-links,
+  .email-positive {
+    padding: 12px;
+  }
+  .email-limitations {
+    padding: 12px;
+  }
 }
 
 .result .report-basis {

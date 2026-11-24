@@ -17,13 +17,14 @@ export async function api(path, method = "GET", data) {
     const extension = data.name.match(/\.([a-z0-9]{1,8})$/i);
     if (extension)
       init.headers["X-File-Extension"] = extension[1].toLowerCase();
+    init.headers["X-File-Name"] = encodeURIComponent(data.name);
     init.body = data;
   } else if (data !== undefined) {
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(data);
   }
   init.signal = AbortSignal.timeout(
-    data instanceof File ? 45000 : path === "check-url" ? 30000 : 20000,
+    data instanceof File ? 300000 : path === "check-url" ? 30000 : 20000,
   );
   let response;
   try {

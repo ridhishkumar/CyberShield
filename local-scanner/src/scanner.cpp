@@ -10,7 +10,9 @@ using TCP = asio::ip::tcp;
 static std::string request(const std::string &command,
                            const std::string *data = nullptr) {
   TCP::iostream stream;
-  stream.expires_after(std::chrono::seconds(data ? 30 : 2));
+  const auto timeout =
+      !data ? 2 : data->size() > 8 * 1024 * 1024 ? 240 : 30;
+  stream.expires_after(std::chrono::seconds(timeout));
   stream.connect("127.0.0.1", "3310");
   if (!stream)
     throw std::runtime_error("Local ClamAV daemon unavailable.");
@@ -48,7 +50,13 @@ bool file(const std::string &data) {
     return false;
   if (r.size() > 6 && r.substr(r.size() - 6) == " FOUND")
     return true;
-  throw std::runtime_error("Engine could not complete this file.");
+  if (r.find("INSTREAM size limit exceeded") != std::string::npos ||
+      r.find("Size limit exceeded") != std::string::npos)
+    throw std::runtime_error(
+        "ClamAV rejected the file because its stream or scan-size limit is "
+        "below this file's size. Configure StreamMaxLength, MaxFileSize, and "
+        "MaxScanSize to at least 200 MB.");
+  throw std::runtime_error("ClamAV could not complete this file scan: " + r);
 }
 void device(const std::function<void(Progress)> &update) {
 #ifdef _WIN32

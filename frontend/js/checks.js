@@ -1,5 +1,6 @@
 import { $, api, submit, input, area, card, esc, icon } from "./common.js";
 import { display, displayedCategory } from "./reports.js";
+const maxSelectedFileBytes = 200000000;
 const addressField = (label, required, max = 2048) =>
   input(
     "url",
@@ -26,19 +27,27 @@ const checks = {
     title: "Software and source",
     action: "Check software",
     endpoint: "check-software",
-    hint: "Enter a software name or a download address. Add both to compare the product with its distribution source.",
+    hint: "Enter a hostname or full HTTP(S) download URL. A recognized hostname only identifies a configured publisher source; it does not verify the downloaded file or every link on that site. Pasted URLs are analyzed without being opened.",
     fields: () =>
       input("name", "Software name", "text", 120) +
-      addressField("Download URL", false) +
+      input(
+        "url",
+        "Download hostname or URL",
+        "text",
+        2048,
+        'inputmode="url" autocapitalize="none" spellcheck="false" placeholder="example.org or https://example.org/download"',
+      ) +
       input("publisher", "Declared publisher (optional)", "text", 120) +
       area("description", "Context (optional)", 1500) +
-      dnsField,
+      '<label class="filebox">' +
+      icon("file-check-2") +
+      ' Optional downloaded installer<input name="file" type="file" accept=".exe,.msi,.msix,.appx,.dmg,.pkg,.deb,.rpm,.appimage,.zip,.7z,.tar,.gz"><small>One file, up to 200 MB (200,000,000 bytes). File bytes are scanned locally and are not sent to an external reputation service.</small></label>',
   },
   "email-detector": {
     title: "Email to analyze",
     action: "Analyze email",
     endpoint: "check-email",
-    hint: "Paste the email as plain text. Include the original headers to check reply addresses and reported authentication results.",
+    hint: "Paste email text for local analysis; CyberShield does not connect to Gmail. Links are checked without opening them and compared with configured official domains when a supported organization is identified. Include original headers for reply-address and reported authentication checks.",
     fields: () =>
       input(
         "sender",
@@ -57,91 +66,21 @@ const checks = {
     title: "Text message to analyze",
     action: "Analyze SMS",
     endpoint: "check-sms",
-    hint: "Enter the number shown on the text, if available, and paste the message. History saves the assessment without the number or message.",
+    hint: "Paste the sender exactly as shown in your SMS app, if available, and paste the message. Analysis is local; sender labels are not authenticated, and saved history omits the sender and exact evidence excerpts. No SMS permission is used.",
     fields: () =>
       input(
-        "phone",
-        "Sender phone number (optional)",
-        "tel",
-        32,
-        'autocomplete="off" placeholder="+1 202 555 0147"',
+        "sender",
+        "Sender ID or phone number (optional)",
+        "text",
+        128,
+        'autocomplete="off" autocapitalize="characters" placeholder="Paste exactly as displayed"',
       ) + area("content", "SMS message", 5000, "required"),
   },
 };
-const urlShorteners = new Set([
-  "bit.ly", "t.co", "tinyurl.com", "is.gd", "cutt.ly", "rb.gy",
-  "shorturl.at", "rebrand.ly", "ow.ly", "buff.ly",
-]);
-const riskSuffixes = [
-  ".zip", ".mov", ".click", ".top", ".work", ".support", ".rest",
-  ".country", ".gq", ".tk", ".ml", ".cf", ".xyz", ".online", ".site", ".live",
-];
 function addFinding(report, text, points) {
   if (report.findings.some((item) => item.text === text)) return false;
   report.findings.push({ text, points });
   return true;
-}
-function inspectUrl(raw) {
-  const findings = [];
-  let parsed;
-  try {
-    parsed = new URL(raw.startsWith("www.") ? "https://" + raw : raw);
-  } catch {
-    return findings;
-  }
-  const host = parsed.hostname.toLowerCase();
-  const labels = host.split(".").filter(Boolean);
-  if (urlShorteners.has(host))
-    findings.push(["The address uses a URL-shortening service, which hides the final destination.", 20]);
-  if (riskSuffixes.some((suffix) => host.endsWith(suffix)))
-    findings.push(["The domain uses a suffix sometimes seen in abuse-prone registrations; this alone does not make it malicious.", 8]);
-  if (labels.length >= 5)
-    findings.push(["The hostname has an unusually deep subdomain structure.", 12]);
-  if ((parsed.href.match(/%/g) || []).length >= 5)
-    findings.push(["The URL contains many percent-encoded characters, making its destination harder to read.", 10]);
-  if ((parsed.href.match(/&/g) || []).length >= 8)
-    findings.push(["The URL contains an unusually complex query string.", 8]);
-  if (/(login|signin|verify|account|password|payment|wallet)/i.test(parsed.pathname) && (host.includes("-") || labels.length >= 4))
-    findings.push(["A sensitive account-related path is combined with a complex hostname.", 12]);
-  return findings;
-}
-function applyWebOrEmailTrust(report, id, data) {
-  if (id === "software-detector") return;
-  if (typeof report.trust_score === "number") return;
-  let extraRisk = 0;
-  const urls = [];
-  if (data.url) urls.push(data.url);
-  if (id === "email-detector") {
-    const matches = data.content.match(/(?:https?:\/\/|www\.)[^\s<>"']+/gi) || [];
-    for (const value of matches.slice(0, 32))
-      urls.push(value.replace(/[),.;!?]+$/, ""));
-  }
-  const seen = new Set();
-  for (const raw of urls) {
-    for (const [text, points] of inspectUrl(raw)) {
-      if (!seen.has(text)) {
-        if (addFinding(report, text, points)) extraRisk += points;
-        seen.add(text);
-      }
-    }
-  }
-  const baseRisk = Number.isFinite(report.score)
-    ? report.score
-    : report.findings.reduce((sum, item) => sum + Number(item.points || 0), 0);
-  let evidencePenalty = 0;
-  evidencePenalty = (data.sender ? 12 : 20) + (data.headers ? 0 : 18);
-  if (data.headers) {
-    const allPass = ["spf", "dkim", "dmarc"].every((key) =>
-      new RegExp("\\b" + key + "\\s*=\\s*pass\\b", "i").test(data.headers),
-    );
-    if (!allPass) evidencePenalty += 8;
-  }
-  const risk = Math.min(100, baseRisk + extraRisk);
-  report.score = risk;
-  report.trust_score = Math.max(0, 100 - risk - evidencePenalty);
-  report.confidence_penalty = evidencePenalty;
-  report.notes.push("Trust score = 100 minus detected risk indicators and an evidence-coverage penalty. It is a screening estimate, not a probability or guarantee.");
-  report.notes.push("Email sender identity and supplied authentication headers are not independently authenticated by this local analysis.");
 }
 async function applyFileTrust(report, file) {
   if (typeof report.trust_score === "number") return;
@@ -155,10 +94,12 @@ async function applyFileTrust(report, file) {
   const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   const textExtensions = ["txt", "csv", "log", "md", "json", "xml", "html", "css"];
   const sample = bytes.subarray(0, Math.min(bytes.length, 4096));
+  const content = new TextDecoder("latin1")
+    .decode(bytes.subarray(0, 4 * 1024 * 1024))
+    .toLowerCase();
   const isText = textExtensions.includes(extension) && !sample.includes(0) &&
     sample.every((value) => value === 9 || value === 10 || value === 13 || value >= 32);
   const kind = isPdf ? "PDF" : isPe ? "Windows executable" : isZip ? "ZIP container" : isPng ? "PNG image" : isJpeg ? "JPEG image" : isText ? "plain-text document" : "unrecognized file format";
-  const content = new TextDecoder("latin1").decode(bytes).toLowerCase();
   let penalty = 0;
   const mismatch =
     (extension === "pdf" && !isPdf) || (isPdf && extension !== "pdf") ||
@@ -227,8 +168,43 @@ function normalizeAddress(value) {
   }
   return url;
 }
+function normalizeSoftwareAddress(value) {
+  const raw = value.trim();
+  if (!raw) return "";
+  const explicitScheme = raw.match(/^([a-z][a-z0-9+.-]*):\/\//i);
+  const schemeLikePrefix =
+    /^[a-z][a-z0-9+.-]*:/i.test(raw) &&
+    !/^[^/?#]+:\d+(?:[/?#]|$)/.test(raw);
+  if (
+    (explicitScheme && !/^https?$/i.test(explicitScheme[1])) ||
+    (schemeLikePrefix && !explicitScheme)
+  )
+    throw Error("Use an HTTP(S) hostname or download URL.");
+  const candidate = raw.startsWith("//")
+    ? "https:" + raw
+    : explicitScheme
+      ? raw
+      : "https://" + raw;
+  try {
+    const parsed = new URL(candidate);
+    if (!["http:", "https:"].includes(parsed.protocol))
+      throw Error("Use an HTTP(S) hostname or download URL.");
+    if (!parsed.hostname)
+      throw Error("Enter a hostname or complete HTTP(S) download URL.");
+  } catch (error) {
+    if (error.message === "Use an HTTP(S) hostname or download URL.")
+      throw error;
+    const authority = raw.replace(/^https?:\/\//i, "").split(/[/?#]/, 1)[0];
+    if (!authority.includes("%"))
+      throw Error("Enter a valid hostname or complete HTTP(S) download URL.");
+  }
+  return normalizeAddress(raw);
+}
 function validWebsiteReport(report) {
   const categories = new Set([
+    "Safe",
+    "Be Cautious",
+    "Highly Risky",
     "High risk",
     "Moderate Risk",
     "Low Risk",
@@ -415,25 +391,49 @@ export function checker(id) {
   submit(form, async (data) => {
     const current = ++generation;
     result.replaceChildren();
+    let report;
+    if (id === "website-detector")
+      form.querySelector("output").textContent =
+        "Inspecting the submitted URL with CyberShield's local engine…";
     if ("url" in data) {
-      data.url = normalizeAddress(data.url);
+      data.url =
+        id === "software-detector"
+          ? normalizeSoftwareAddress(data.url)
+          : normalizeAddress(data.url);
       data.dnsLookup = data.dnsLookup === "on";
     }
     if (id === "software-detector") {
       data.name = data.name.trim();
       if (!data.name && !data.url)
         throw Error("Enter a software name or a download URL.");
-    }
-    if (id === "website-detector")
-      form.querySelector("output").textContent =
-        "Inspecting the submitted URL with CyberShield's local engine…";
-    let report;
-    try {
-      report = await api(check.endpoint, "POST", data);
-    } catch (error) {
-      if (id === "website-detector")
-        throw Error("Unable to verify this URL. " + error.message);
-      throw error;
+      const file = data.file;
+      delete data.file;
+      if (file && file.name && file.size === 0)
+        throw Error("The selected file is empty. Choose a nonempty installer.");
+      if (file && file.name && file.size > maxSelectedFileBytes)
+        throw Error(
+          "The selected file is larger than 200 MB (200,000,000 bytes). Use the download URL field to check its source; this is a URL check, not a file scan.",
+        );
+      if (file && file.name) {
+        const query = new URLSearchParams();
+        for (const key of ["name", "url", "publisher", "description"])
+          if (data[key]) query.set(key, data[key]);
+        report = await api(
+          "check-software-file?" + query.toString(),
+          "POST",
+          file,
+        );
+      } else {
+        report = await api(check.endpoint, "POST", data);
+      }
+    } else {
+      try {
+        report = await api(check.endpoint, "POST", data);
+      } catch (error) {
+        if (id === "website-detector")
+          throw Error("Unable to verify this URL. " + error.message);
+        throw error;
+      }
     }
     if (current !== generation)
       return id === "website-detector"
@@ -443,8 +443,6 @@ export function checker(id) {
       throw Error(
         "The running server returned an incompatible Website report. Close old CyberShield server windows, start the updated copy, and try again.",
       );
-    if (id === "software-detector" || id === "email-detector")
-      applyWebOrEmailTrust(report, id, data);
     display(result, report);
     result.focus({ preventScroll: true });
     if (matchMedia("(max-width: 800px)").matches)
@@ -470,18 +468,12 @@ export async function device() {
       "Scan a file or application",
       '<p>Inspect file bytes and request a malware verdict from ClamAV or the Windows antimalware provider.</p><form id="fileform"><label class="filebox">' +
         icon("file-check-2") +
-        ' Select a file<input type="file" required><small>One file, up to 8 MiB</small></label><small id="meta"></small><button class="primary">Scan selected file</button><output role="status"></output></form><div id="file-result" tabindex="-1" aria-label="Selected file report"></div>',
+        ' Select a file<input type="file" required><small>One file, up to 200 MB (' +
+        maxSelectedFileBytes.toLocaleString() +
+        ' bytes)</small></label><small id="meta"></small><button class="primary">Scan selected file</button><output role="status"></output></form><div id="file-result" tabindex="-1" aria-label="Selected file report"></div>',
     ) +
-    card(
-      "Complete device scan",
-      '<p>Scan accessible files on fixed Windows drives with the installed helper.</p><p id="progress" role="status" aria-live="polite">Checking the scanner connection…</p><div class="actions"><button id="full" class="primary" hidden>Scan fixed drives</button><button id="refresh">Check connection</button></div><details id="alternative"><summary>Other ways to scan</summary><p>On Windows, open Windows Security, choose Virus &amp; threat protection → Scan options → Full scan. Review the results in Windows Security.</p><p>To see results here, install ClamAV, update its signatures and start clamd on loopback port 3310. See the project README for setup.</p></details>',
-    ) +
-    '</div><section id="result"></section>';
-  const file = $("#fileform input"),
-    full = $("#full"),
-    refresh = $("#refresh"),
-    progress = $("#progress");
-  let timer;
+    "</div>";
+  const file = $("#fileform input");
   file.onchange = () => {
     $("#file-result").replaceChildren();
     $("#fileform output").textContent = "";
@@ -492,81 +484,48 @@ export async function device() {
         (f.type || "Unknown type") +
         " · " +
         f.size.toLocaleString() +
-        " bytes"
+        " bytes (" +
+        (f.size / 1000000).toFixed(2) +
+        " MB)"
       : "";
   };
-  submit($("#fileform"), async () => {
+  const form = $("#fileform");
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button.primary");
+    const output = form.querySelector("output");
+    if (button.disabled) return;
     const f = file.files[0];
-    if (!f || !f.size || f.size > 8388608)
-      throw Error("Select a nonempty file up to 8 MiB.");
-    $("#file-result").replaceChildren();
-    const report = await api("check-file", "POST", f);
-    if (file.files[0] !== f) return;
-    await applyFileTrust(report, f);
-    if (file.files[0] !== f) return;
-    display($("#file-result"), report);
-    $("#file-result").focus({ preventScroll: true });
-    return "File report ready.";
-  });
-  function showState(s) {
-    clearTimeout(timer);
-    const running = s.state === "running";
-    full.hidden = !s.enabled || running || s.busy;
-    $("#alternative").open = !s.enabled && !running;
-    if (running) {
-      progress.textContent =
-        "Scanning fixed drives · " +
-        s.checked +
-        " checked · " +
-        s.detected +
-        " detections · " +
-        s.errors +
-        " skipped or failed.";
-    } else if (s.state === "done") {
-      progress.textContent = "Scan complete. Your report is below.";
-      display($("#result"), s.report);
-    } else if (s.state === "failed") progress.textContent = s.message;
-    else if (s.busy)
-      progress.textContent = "Another scan is using the local engine.";
-    else if (!s.fileReady)
-      progress.textContent =
-        "Full-drive scan unavailable while ClamAV is offline. You can still inspect an individual file.";
-    else if (!s.helperReady)
-      progress.textContent =
-        "File scanning is ready. Full scans require the Windows helper.";
-    else
-      progress.textContent = "Local ClamAV and the Windows helper are ready.";
-    if (running || s.busy) timer = setTimeout(poll, 2000);
-  }
-  async function poll() {
-    clearTimeout(timer);
-    refresh.disabled = true;
-    try {
-      showState(await api("device"));
-    } catch (e) {
-      full.hidden = true;
-      progress.textContent = e.message + " Use Check connection to resume.";
-    } finally {
-      refresh.disabled = false;
-    }
-  }
-  full.onclick = async () => {
-    if (
-      !confirm(
-        "Start a local antivirus scan of accessible files on all fixed drives?",
-      )
-    )
+    if (!f) {
+      output.textContent = "Select a file to scan.";
       return;
-    full.disabled = refresh.disabled = true;
-    progress.textContent = "Starting the local scanner…";
-    try {
-      showState(await api("device", "POST", { consent: true }));
-    } catch (e) {
-      progress.textContent = e.message;
-    } finally {
-      full.disabled = refresh.disabled = false;
     }
-  };
-  refresh.onclick = poll;
-  await poll();
+    if (f.size === 0) {
+      output.textContent = "The selected file is empty. Choose a nonempty file.";
+      return;
+    }
+    if (f.size > maxSelectedFileBytes) {
+      output.innerHTML =
+        'The selected file is larger than 200 MB (' +
+        maxSelectedFileBytes.toLocaleString() +
+        ' bytes). Use <a href="/pages/software-detector.html">Software Detector</a> to check its download source; this is a URL check, not a file scan.';
+      return;
+    }
+    button.disabled = true;
+    output.textContent = "Scanning file…";
+    $("#file-result").replaceChildren();
+    try {
+      const report = await api("check-file", "POST", f);
+      if (file.files[0] !== f) return;
+      await applyFileTrust(report, f);
+      if (file.files[0] !== f) return;
+      display($("#file-result"), report);
+      $("#file-result").focus({ preventScroll: true });
+      output.textContent = "File report ready.";
+    } catch (e) {
+      output.textContent = e.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
 }

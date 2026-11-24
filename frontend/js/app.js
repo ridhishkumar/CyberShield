@@ -19,6 +19,12 @@ async function run() {
   document.body.classList.add("signed");
   const settingsData = await api("settings");
   theme(settingsData.theme);
+  const headerBrand = brand
+    .replace(
+      '<img class="wordmark"',
+      '<span class="wordmark-crop"><img class="wordmark"',
+    )
+    .replace('alt="CyberShield"></a>', 'alt="CyberShield"></span></a>');
   const isCurrent = (page) => (page === id ? ' aria-current="page"' : "");
   const features = navigation
     .map(
@@ -32,7 +38,7 @@ async function run() {
     <header class="top">
       <div class="top-brand">
         <button class="mobiletoggle" id="menu" aria-label="Toggle navigation" aria-controls="features" aria-expanded="false">${icon("menu")}</button>
-        ${brand}
+        ${headerBrand}
       </div>
       <nav class="account-nav" aria-label="Account">
         <button id="notices" aria-label="Notifications" aria-controls="popover" aria-expanded="false">${icon("bell")}</button>

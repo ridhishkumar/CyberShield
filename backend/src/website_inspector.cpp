@@ -1,4 +1,5 @@
 #include "website_inspector.h"
+#include "website_domain_denylist_config.h"
 #include "website_tld_config.h"
 
 #include <asio.hpp>
@@ -16,6 +17,14 @@
 #include <sstream>
 
 namespace website_inspector {
+S categoryForScore(int score) {
+  score = std::max(0, std::min(100, score));
+  if (score >= 61)
+    return "Highly Risky";
+  if (score >= 36)
+    return "Be Cautious";
+  return "Safe";
+}
 namespace {
 using Clock = std::chrono::steady_clock;
 constexpr size_t MaxBodyBytes = 1024 * 1024;
@@ -1159,7 +1168,8 @@ ScoreResult scoreFindings(const std::vector<Finding> &findings) {
       {"url", 26},       {"identity", 55}, {"content", 30},
       {"forms", 40},     {"links", 20},    {"redirect", 22},
       {"tls", 12},       {"http", 10},     {"dns", 8},
-      {"tld", config::UnapprovedTldRiskPoints}};
+      {"tld", config::UnapprovedTldRiskPoints},
+      {"denylist", 100}};
   std::map<S, const Finding *> unique;
   for (const auto &finding : findings) {
     const auto found = unique.find(finding.id);
@@ -1626,6 +1636,10 @@ J inspectHtml(const S &html, const S &baseUrl) {
 }
 
 J inspectWebsite(const J &input) {
+  return inspectWebsite(input, config::StrictlyDeniedDomains);
+}
+
+J inspectWebsite(const J &input, const std::set<S> &strictDenylist) {
   const S submitted = input.value("url", S());
   const S context = input.value("description", S());
   if (context.size() > 1500)
@@ -1650,6 +1664,17 @@ J inspectWebsite(const J &input) {
             "Content inspection applies to HTML responses.")});
   std::vector<Finding> findings;
   J notes = J::array();
+  const bool strictlyDenied =
+      isStrictlyDeniedHost(initial.host, strictDenylist);
+  if (strictlyDenied) {
+    addFinding(findings, "strictly_denied_domain", "denylist", "high",
+               "The hostname matches the local strict-deny list.",
+               "Hostname: " + initial.host, 90, 100,
+               "strict_domain_denylist");
+    notes.push_back(
+        "The hostname matches the local strict-deny list and receives at "
+        "least 90 risk points.");
+  }
   J tldPolicy;
   if (initial.isIp) {
     tldPolicy = {{"status", "not_applicable"},
@@ -2292,9 +2317,10 @@ J inspectWebsite(const J &input) {
                    contentEvidence));
   }
 
-  // A live response is required for an overall numeric risk score. Structural
-  // findings remain visible when the remote inspection cannot be completed.
+  // A live response is required for a numeric score unless the local strict
+  // denylist provides an authoritative policy verdict.
   const bool hasRemoteResponse = terminalResponse;
+  const bool hasNumericVerdict = hasRemoteResponse || strictlyDenied;
   const ScoreResult scored = scoreFindings(findings);
   const int score = scored.score;
   int completed = 0, applicable = 0;
@@ -2308,29 +2334,19 @@ J inspectWebsite(const J &input) {
   const int confidence =
       applicable ? (100 * completed + applicable / 2) / applicable : 0;
   S category = "Unable to Verify";
-  if (hasRemoteResponse) {
-    category = score >= 50   ? "High risk"
-               : score >= 25 ? "Suspicious"
-               : score >= 10 ? "Moderate Risk"
-               : score > 0   ? "Low Risk"
-                             : "No Known Issues Detected";
+  if (hasNumericVerdict) {
+    category = categoryForScore(score);
   }
   S advice =
-      category == "High risk"
+      category == "Highly Risky"
           ? "Do not enter credentials or payment details. Verify the destination "
             "through a separately obtained official address."
-      : category == "Suspicious"
-          ? "Review the findings and independently confirm the site's identity "
-            "before entering sensitive information."
-      : category == "Moderate Risk"
+      : category == "Be Cautious"
           ? "Review the findings and independently verify the destination "
             "before sharing personal, login, or payment information."
-      : category == "Low Risk"
-          ? "Review the findings and use an independently obtained official "
-            "address before sharing sensitive information."
-      : category == "No Known Issues Detected"
-          ? "No suspicious indicators were found in the checks completed. This "
-            "is not a guarantee that the website is safe."
+      : category == "Safe"
+          ? "No strong suspicious indicators were found in the checks completed. "
+            "This is not a guarantee that the website is safe."
           : "The available evidence was insufficient to assess the website. "
             "Retry later or verify the destination through an official source.";
 
@@ -2338,7 +2354,7 @@ J inspectWebsite(const J &input) {
               {"target", initial.host},
               {"hostname", initial.host},
               {"category", category},
-              {"score", hasRemoteResponse ? J(score) : J(nullptr)},
+              {"score", hasNumericVerdict ? J(score) : J(nullptr)},
               {"observed_score", score},
               {"tld_policy", tldPolicy},
               {"findings", findingsJson(findings)},
@@ -2356,11 +2372,13 @@ J inspectWebsite(const J &input) {
                 {"category_subtotal", scored.categorySubtotal},
                 {"independent_categories", scored.independentCategories},
                 {"corroboration_bonus", scored.corroborationBonus},
-                {"total", hasRemoteResponse ? J(score) : J(nullptr)},
+                {"total", hasNumericVerdict ? J(score) : J(nullptr)},
                 {"observed_total", score},
                 {"observed_scope",
-                 hasRemoteResponse ? "complete_inspection"
-                                   : "incomplete_inspection"},
+                 hasRemoteResponse
+                     ? "complete_inspection"
+                     : strictlyDenied ? "strict_denylist"
+                                      : "incomplete_inspection"},
                 {"method",
                  "Finding points are reliability-weighted, correlated findings "
                  "within a family are capped, each category has a cap, and "
@@ -2368,7 +2386,8 @@ J inspectWebsite(const J &input) {
                  "corroboration bonus. The final score is capped at 100; "
                  "missing checks add no risk. When full inspection does not "
                  "complete, observed_total is only a score of collected "
-                 "evidence and is not a full-site verdict."}}},
+                 "evidence and is not a full-site verdict, except for an "
+                 "explicit strict-denylist match."}}},
               {"indicator_coverage", indicatorCoverage()},
               {"redirects", redirectRows},
               {"inspection",
@@ -2411,7 +2430,7 @@ J inspectWebsite(const J &input) {
       "requests.");
   report["notes"].push_back(
       "No website is guaranteed safe by the absence of detected indicators.");
-  report["score"] = hasRemoteResponse ? J(score) : J(nullptr);
+  report["score"] = hasNumericVerdict ? J(score) : J(nullptr);
   report["confidence"]["percentage"] = confidence;
   return report;
 }

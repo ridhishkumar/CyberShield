@@ -6,6 +6,7 @@
 
 #include "crow/http_request.h"
 #include "crow/http_parser_merged.h"
+#include "../../../include/upload_limits.h"
 
 namespace crow
 {
@@ -89,7 +90,11 @@ namespace crow
         {
             HTTPParser* self = static_cast<HTTPParser*>(self_);
             // CyberShield bounds buffered bodies before allocating more memory.
-            const size_t limit = self->req.raw_url == "/api/check-file" ? 8 * 1024 * 1024 : 65536;
+            const size_t limit =
+                (self->req.url == "/api/check-file" ||
+                 self->req.url == "/api/check-software-file")
+                    ? cybershield::MaxSelectedFileBytes
+                    : 65536;
             if (length > limit - self->req.body.size())
                 return 1;
             self->req.body.insert(self->req.body.end(), at, at + length);

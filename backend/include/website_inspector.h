@@ -2,6 +2,7 @@
 
 #include "app.h"
 #include <map>
+#include <set>
 #include <vector>
 
 namespace website_inspector {
@@ -43,7 +44,11 @@ struct TldAssessment {
 bool parseUrl(const S &input, ParsedUrl &parsed, S &error);
 bool isPublicAddress(const S &address);
 TldAssessment assessTld(const S &hostname);
+bool isStrictlyDeniedHost(const S &hostname,
+                          const std::set<S> &denylist);
 ScoreResult scoreFindings(const std::vector<Finding> &findings);
+S categoryForScore(int score);
 J inspectHtml(const S &html, const S &baseUrl);
 J inspectWebsite(const J &input);
+J inspectWebsite(const J &input, const std::set<S> &strictDenylist);
 }

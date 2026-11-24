@@ -1,4 +1,5 @@
 #include "website_inspector.h"
+#include "website_domain_denylist_config.h"
 #include <cassert>
 
 #undef assert
@@ -36,6 +37,13 @@ int main() {
   assert(!website_inspector::isPublicAddress("::1"));
   assert(!website_inspector::isPublicAddress("fc00::1"));
 
+  for (const auto &boundary :
+       std::map<int, S>{{0, "Safe"}, {35, "Safe"}, {36, "Be Cautious"},
+                        {60, "Be Cautious"}, {61, "Highly Risky"},
+                        {100, "Highly Risky"}})
+    assert(website_inspector::categoryForScore(boundary.first) ==
+           boundary.second);
+
   const J blocked =
       website_inspector::inspectWebsite({{"url", "http://127.0.0.1"}});
   assert(blocked["category"] == "Unable to Verify");
@@ -48,6 +56,13 @@ int main() {
   assert(blocked["scoring"]["total"].is_null());
   assert(blocked["indicator_coverage"].size() >= 20);
   assert(blocked["indicator_coverage"][6]["status"] == "not_checked");
+  const std::set<S> loopbackDenylist = {"127.0.0.1"};
+  const J explicitlyDenied = website_inspector::inspectWebsite(
+      {{"url", "http://127.0.0.1"}}, loopbackDenylist);
+  assert(explicitlyDenied["category"] == "Highly Risky");
+  assert(explicitlyDenied["score"] >= 90);
+  assert(explicitlyDenied["observed_score"] >= 90);
+  assert(explicitlyDenied["scoring"]["observed_scope"] == "strict_denylist");
   const J lookalike = website_inspector::inspectWebsite(
       {{"url", "https://www.youtube.fb/"}});
   assert(lookalike["score"].is_null());
@@ -98,10 +113,22 @@ int main() {
   assert(!unapprovedTld.approved);
   assert(unapprovedTld.suffix == ".xyz");
   assert(unapprovedTld.riskPoints == 51);
+  assert(!website_inspector::isStrictlyDeniedHost(
+      "example.xyz", website_inspector::config::StrictlyDeniedDomains));
   assert(website_inspector::scoreFindings(
              {finding("unapproved-tld", "tld", "approved_tld_policy",
                       unapprovedTld.riskPoints)})
-             .score >= 51);
+             .score == 51);
+  const std::set<S> testDenylist = {"blocked.example"};
+  assert(website_inspector::isStrictlyDeniedHost("blocked.example",
+                                                 testDenylist));
+  assert(website_inspector::isStrictlyDeniedHost("sub.BLOCKED.example.",
+                                                 testDenylist));
+  assert(!website_inspector::isStrictlyDeniedHost("blocked.example.evil",
+                                                  testDenylist));
+  const auto strictDenyScore = website_inspector::scoreFindings(
+      {finding("strict-deny", "denylist", "strict_domain_denylist", 90)});
+  assert(strictDenyScore.score == 90);
   const auto fakeCom = website_inspector::assessTld("example.com.fake");
   assert(!fakeCom.approved);
   assert(fakeCom.suffix == ".fake");

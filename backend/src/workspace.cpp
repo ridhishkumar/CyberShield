@@ -35,10 +35,42 @@ void record(DB &db, const S &uid, J &report) {
         report["confidence"].value("completed", 0) <
             report["confidence"].value("applicable", 0))
       score = nullptr;
+    J storedReport = report;
+    if (storedReport.value("type", S()) == "Software") {
+      if (storedReport.contains("source_url") &&
+          storedReport["source_url"].is_string()) {
+        S address = storedReport["source_url"].get<S>();
+        const size_t query = address.find_first_of("?#");
+        if (query != S::npos)
+          address.erase(query);
+        const size_t scheme = address.find("://");
+        if (scheme != S::npos) {
+          const size_t authorityStart = scheme + 3;
+          const size_t authorityEnd = address.find('/', authorityStart);
+          const size_t at = address.rfind('@', authorityEnd);
+          if (at != S::npos && at >= authorityStart)
+            address.erase(authorityStart, at - authorityStart + 1);
+        }
+        storedReport["source_url"] = address;
+      }
+      storedReport.erase("file_name");
+      if (storedReport.contains("file_details") &&
+          storedReport["file_details"].is_object())
+        storedReport["file_details"].erase("name");
+    }
+    if (storedReport.value("type", S()) == "SMS" &&
+        storedReport.contains("findings") &&
+        storedReport["findings"].is_array()) {
+      for (J &finding : storedReport["findings"])
+        if (finding.is_object()) {
+          finding.erase("evidence");
+          finding["evidence_status"] = "omitted_from_history";
+        }
+    }
     db.query("INSERT INTO scans(uid,type,target,category,score,detail) "
              "VALUES(?,?,?,?,NULLIF(?,'null'),?)",
              {uid, report["type"], report["target"], report["category"],
-              score.dump(), report.dump()});
+              score.dump(), storedReport.dump()});
   }
   notify(db, uid, "scans", report["type"].get<S>() + " check completed.");
   if (report["category"] == "High risk")

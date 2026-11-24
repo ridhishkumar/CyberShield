@@ -3,15 +3,42 @@
 #include "app.h"
 #include "crow.h"
 #include "integrations.h"
+#include "upload_limits.h"
+#include "software_analyzer.h"
 #include "website_inspector.h"
 #include <ctime>
 #include <fstream>
+#include <cctype>
 #include <map>
 #include <mutex>
 #include <regex>
 namespace fs = std::filesystem;
-J analyzeFile(const S &, const S &);
+J analyzeFile(const S &, const S &, const S &);
 J softwareSources();
+static S decodeHeaderValue(const S &value) {
+  S decoded;
+  for (size_t i = 0; i < value.size(); ++i) {
+    if (value[i] == '%' && i + 2 < value.size()) {
+      const auto digit = [](char c) {
+        if (c >= '0' && c <= '9')
+          return c - '0';
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+      };
+      const int high = digit(value[i + 1]), low = digit(value[i + 2]);
+      if (high >= 0 && low >= 0) {
+        decoded += static_cast<char>(high * 16 + low);
+        i += 2;
+        continue;
+      }
+    }
+    decoded += value[i];
+  }
+  const size_t separator = decoded.find_last_of("/\\");
+  if (separator != S::npos)
+    decoded.erase(0, separator + 1);
+  return decoded;
+}
 static S tokenOf(const crow::request &req) {
   std::istringstream in(req.get_header_value("Cookie"));
   S item;
@@ -50,9 +77,13 @@ static crow::response api(const crow::request &req, S path) {
       throw Problem(403, "Use the local CyberShield address.");
     S method = crow::method_name(req.method), token = tokenOf(req), cookie;
     bool write = method != "GET";
-    bool file = path == "check-file";
-    if (req.body.size() > (file ? 8u * 1024 * 1024 : 65536u))
-      throw Problem(413, "Input exceeds the size limit.");
+    bool softwareFile = path == "check-software-file";
+    bool file = path == "check-file" || softwareFile;
+    if (req.body.size() >
+        (file ? cybershield::MaxSelectedFileBytes : 65536u))
+      throw Problem(413, "File exceeds 200 MB (200,000,000 bytes). Use "
+                         "Software Detector to check the download source; "
+                         "that is a URL check, not a file scan.");
     if (write && req.get_header_value("X-CyberShield") != "1")
       throw Problem(403, "Use a same-origin request.");
     limit(req.remote_ip_address +
@@ -68,6 +99,10 @@ static crow::response api(const crow::request &req, S path) {
     for (auto key : {"q", "id"})
       if (auto value = req.url_params.get(key))
         data[key] = S(value);
+    if (softwareFile)
+      for (auto key : {"name", "url", "publisher", "description"})
+        if (auto value = req.url_params.get(key))
+          data[key] = S(value);
     DB db;
     S uid = sessionUser(db, token);
     const bool accountEntry =
@@ -87,8 +122,9 @@ static crow::response api(const crow::request &req, S path) {
       return reply(200, newsFeed());
     bool detector =
         method == "POST" && (path == "check-url" || path == "check-email" ||
-                             path == "check-software" || path == "check-sms");
-    if (detector) {
+                             path == "check-software" || path == "check-sms" ||
+                             softwareFile);
+    if (detector && !softwareFile) {
       if (path == "check-url") {
         result = website_inspector::inspectWebsite(data);
       } else {
@@ -106,8 +142,25 @@ static crow::response api(const crow::request &req, S path) {
     if (file && method == "POST") {
       if (req.body.empty())
         throw Problem(400, "Choose a nonempty file.");
-      result = analyzeFile(req.body,
-                           lower(req.get_header_value("X-File-Extension")));
+      const S extension =
+          lower(req.get_header_value("X-File-Extension"));
+      const S fileName =
+          softwareFile
+              ? decodeHeaderValue(req.get_header_value("X-File-Name"))
+              : S();
+      if (fileName.size() > 255)
+        throw Problem(400, "The selected filename is too long.");
+      const J fileReport = analyzeFile(req.body, extension, fileName);
+      if (softwareFile) {
+        const J sourceReport = analyze("Software", data);
+        const J assessment =
+            sourceReport.value("software_assessment", J::object());
+        result = scoreSoftwareReport(
+            sourceReport, assessment.value("signals", J::array()),
+            assessment.value("product_context", J::object()), fileReport);
+      } else {
+        result = fileReport;
+      }
     }
     if (write) {
       db.script("BEGIN IMMEDIATE");

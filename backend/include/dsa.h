@@ -58,16 +58,17 @@ inline S trimLink(S url) {
   size_t i = 0;
   for (; i < url.size(); ++i) {
     char c = url[i];
-    if (c == '(')
+    if (c == '(' || c == '[' || c == '{')
       stack.push_back(c);
-    if (c == ')') {
-      if (stack.empty())
+    if (c == ')' || c == ']' || c == '}') {
+      const char expected = c == ')' ? '(' : c == ']' ? '[' : '{';
+      if (stack.empty() || stack.back() != expected)
         break;
       stack.pop_back();
     }
   }
   url.resize(i);
-  while (!url.empty() && S(".,;!").find(url.back()) != S::npos)
+  while (!url.empty() && S(".,;!?").find(url.back()) != S::npos)
     url.pop_back();
   return url;
 }
